@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <!-- Настройки для мобилок: запрет зума, адаптация под вырезы, цвет статусбара -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#000000">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Iron Log Cloud</title>
+    
+    <!-- PWA Манифест и Иконки -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" type="image/png" href="icon.png">
+    <link rel="apple-touch-icon" href="icon.png">
+
+    <!-- Библиотеки -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Firebase -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+        import { getDatabase, ref, set, get, child } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+        // === ВНИМАНИЕ: ВСТАВЬ СЮДА СВОИ ДАННЫЕ ИЗ FIREBASE CONSOLE ===
+        const firebaseConfig = {
+            apiKey: "ВСТАВЬ_СЮДА_API_KEY",
+            authDomain: "твое-приложение.firebaseapp.com",
+            databaseURL: "https://твое-приложение-default-rtdb.europe-west1.firebasedatabase.app",
+            projectId: "твое-приложение",
+            storageBucket: "твое-приложение.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:xxxxxx"
+        };
+        // ==============================================================
+
+        const app = initializeApp(firebaseConfig);
+        
+        // Делаем функции доступными глобально для Vue
+        window.auth = getAuth(app);
+        window.db = getDatabase(app);
+        window.dbRef = ref(window.db);
+        window.registerUser = (email, pass) => createUserWithEmailAndPassword(window.auth, email, pass);
+        window.loginUser = (email, pass) => signInWithEmailAndPassword(window.auth, email, pass);
+        window.logoutUser = () => signOut(window.auth);
+        
+        // Экспортируем методы базы для Vue
+        window.setDB = set;
+        window.getDB = get;
+        window.childDB = child;
+        window.refDB = ref;
+        window.onAuth = onAuthStateChanged;
+    </script>
+
+    <style>
+        body { 
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+            background-color: #000; 
+            color: #e5e7eb;
+            overflow: hidden; 
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        ::-webkit-scrollbar { width: 3px; }
+        ::-webkit-scrollbar-track { background: #111827; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 2px; }
+        @keyframes fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fade-in 0.3s ease-out forwards; }
+    </style>
+</head>
+<body>
+
+<div id="app" class="h-[100dvh] w-screen flex justify-center items-center bg-black">
+
+    <!-- === ЭКРАН 0: АВТОРИЗАЦИЯ === -->
+    <div v-if="currentScreen === 'auth'" class="w-full max-w-md h-full bg-gray-900 flex flex-col justify-center px-8 animate-fade-in">
+        <div class="text-center mb-10">
+            <div class="text-6xl text-blue-600 mb-4"><i class="fa-solid fa-dumbbell"></i></div>
+            <h1 class="text-3xl font-black text-white tracking-tighter">IRON LOG <span class="text-blue-500">CLOUD</span></h1>
+            <p class="text-gray-400 text-sm">Твой прогресс всегда с тобой</p>
+        </div>
+
+        <div class="bg-gray-800 p-6 rounded-2xl shadow-xl border border-gray-700">
+            <h2 class="text-xl font-bold text-white mb-6 text-center">{{ isLoginMode ? 'Вход' : 'Регистрация' }}</h2>
+            
+            <input v-model="authEmail" type="email" placeholder="Email" class="w-full p-4 bg-gray-900 border border-gray-600 rounded-xl text-white mb-3 outline-none focus:border-blue-500 transition">
+            <input v-model="authPass" type="password" placeholder="Пароль" class="w-full p-4 bg-gray-900 border border-gray-600 rounded-xl text-white mb-6 outline-none focus:border-blue-500 transition">
+            
+            <button @click="handleAuth" :disabled="isLoading" class="w-full bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white font-bold py-4 rounded-xl transition flex justify-center items-center shadow-lg shadow-blue-900/20">
+                <span v-if="isLoading"><i class="fa-solid fa-circle-notch fa-spin"></i></span>
+                <span v-else>{{ isLoginMode ? 'Войти' : 'Создать аккаунт' }}</span>
+            </button>
+
+            <p v-if="authError" class="text-red-500 text-center mt-4 text-xs">{{ authError }}</p>
+        </div>
+
+        <p class="text-center mt-6 text-gray-400 text-sm">
+            {{ isLoginMode ? 'Нет аккаунта?' : 'Уже есть аккаунт?' }} 
+            <span @click="toggleAuthMode" class="text-blue-400 font-bold cursor-pointer hover:underline">{{ isLoginMode ? 'Зарегистрироваться' : 'Войти' }}</span>
+        </p>
+    </div>
+
+    <!-- === ПРИЛОЖЕНИЕ (Видно только после входа) === -->
+    <div v-else class="w-full max-w-md h-full bg-gray-900 shadow-2xl flex flex-col relative border-x border-gray-800 animate-fade-in">
+
+        <!-- ЭКРАН 1: КАЛЕНДАРЬ -->
+        <div v-if="currentScreen === 'calendar'" class="flex flex-col h-full bg-gray-900">
+            <header class="p-4 bg-gray-800 shadow-md flex justify-between items-center border-b border-gray-700 shrink-0 z-20">
+                <div class="flex items-center gap-2">
+                    <div class="w-9 h-9 rounded-full bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center text-sm font-bold shadow-md">{{ userEmail[0].toUpperCase() }}</div>
+                    <div class="flex flex-col">
+                        <span class="text-[10px] text-gray-400 uppercase tracking-wider">Профиль</span>
+                        <span class="text-xs font-bold text-white leading-none truncate w-24">{{ userEmail.split('@')[0] }}</span>
+                    </div>
+                </div>
+                
+                <h2 class="text-lg font-bold text-white uppercase tracking-wide">{{ currentMonthName }} <span class="text-blue-500">{{ currentYear }}</span></h2>
+                
+                <div class="flex gap-1">
+                    <button @click="changeMonth(-1)" class="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-white bg-gray-700/50 rounded-full active:bg-gray-600"><i class="fa-solid fa-chevron-left"></i></button>
+                    <button @click="changeMonth(1)" class="w-8 h-8 flex items-center justify-center text-gray-400 hover:text-white bg-gray-700/50 rounded-full active:bg-gray-600"><i class="fa-solid fa-chevron-right"></i></button>
+                </div>
+            </header>
+
+            <div class="flex-1 overflow-y-auto p-2">
+                <div class="grid grid-cols-7 gap-1 mb-2 text-center text-gray-500 text-[10px] font-bold uppercase pt-2">
+                    <div v-for="day in weekDays" :key="day">{{ day }}</div>
+                </div>
+                <div class="grid grid-cols-7 gap-1 auto-rows-fr">
+                    <div v-for="n in emptyDaysStart" :key="'empty-'+n" class="aspect-square"></div>
+                    
+                    <div v-for="day in daysInMonth" :key="day" 
+                         @click="openDay(day)"
+                         class="aspect-square border border-gray-700 bg-gray-800 rounded-lg flex flex-col items-center justify-start pt-1 cursor-pointer relative transition active:scale-95"
+                         :class="{'border-blue-500 bg-gray-800 shadow-[0_0_10px_rgba(59,130,246,0.2)]': isToday(day)}">
+                        
+                        <span class="text-sm font-medium" :class="{'text-blue-400 font-bold': isToday(day), 'text-gray-300': !isToday(day)}">{{ day }}</span>
+                        
+                        <div class="flex flex-wrap justify-center gap-0.5 mt-1 px-1">
+                            <div v-for="(dot, idx) in getDayDots(day)" :key="idx" 
+                                 class="w-1.5 h-1.5 rounded-full shadow-sm" 
+                                 :style="{ backgroundColor: dot }"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <nav class="bg-gray-800 border-t border-gray-700 flex justify-around p-3 text-xs pb-6 shrink-0 z-20">
+                <button class="flex flex-col items-center text-blue-500">
+                    <i class="fa-solid fa-calendar-days text-xl mb-1"></i> Календарь
+                </button>
+                <button @click="currentScreen = 'analytics'" class="flex flex-col items-center text-gray-500 hover:text-gray-300 transition">
+                    <i class="fa-solid fa-chart-line text-xl mb-1"></i> Графики
+                </button>
+                <button @click="doLogout" class="flex flex-col items-center text-gray-500 hover:text-red-400 transition">
+                    <i class="fa-solid fa-right-from-bracket text-xl mb-1"></i> Выйти
+                </button>
+            </nav>
+        </div>
+
+        <!-- ЭКРАН 2: ТРЕНИРОВКА ДНЯ -->
+        <div v-else-if="currentScreen === 'dayView'" class="flex flex-col h-full bg-gray-900">
+            <header class="p-4 bg-gray-800 shadow-md flex items-center border-b border-gray-700 shrink-0 z-20">
+                <button @click="currentScreen = 'calendar'" class="mr-4 text-gray-400 hover:text-white p-2"><i class="fa-solid fa-arrow-left text-xl"></i></button>
+                <h2 class="text-xl font-bold text-white">{{ formatDate(selectedDate) }}</h2>
+            </header>
+
+            <div class="flex-1 overflow-y-auto p-4 space-y-4">
+                <div v-if="!getDayLogs(selectedDate).length" class="text-center text-gray-600 mt-32 flex flex-col items-center animate-fade-in">
+                    <i class="fa-solid fa-bed text-5xl mb-4 opacity-50"></i>
+                    <p>Сегодня отдых</p>
+                </div>
+
+                <div v-for="(log, idx) in getDayLogs(selectedDate)" :key="idx" class="bg-gray-800 p-4 rounded-xl shadow-lg border-l-4 relative animate-fade-in" :style="{ borderLeftColor: getExerciseColor(log.exerciseId) }">
+                    <div class="flex justify-between items-start mb-3">
+                        <h3 class="font-bold text-lg text-gray-100">{{ getExerciseName(log.exerciseId) }}</h3>
+                        <button @click="deleteLog(selectedDate, idx)" class="text-gray-600 hover:text-red-500 p-2"><i class="fa-solid fa-trash"></i></button>
+                    </div>
+                    <div class="space-y-2">
+                        <div v-for="(set, sIdx) in log.sets" :key="sIdx" class="flex justify-between text-gray-400 bg-gray-900/50 px-3 py-2 rounded">
+                            <span class="text-sm">Подход {{ sIdx + 1 }}</span>
+                            <span class="font-mono font-bold text-gray-200">{{ set.weight }} <span class="text-xs text-gray-500">кг</span> &times; {{ set.reps }}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="h-24"></div>
+            </div>
+
+            <button @click="goToAddExercise" class="absolute bottom-8 right-6 bg-blue-600 text-white w-16 h-16 rounded-full shadow-lg shadow-blue-900/50 flex items-center justify-center text-3xl hover:bg-blue-500 transition active:scale-95 z-30">
+                <i class="fa-solid fa-plus"></i>
+            </button>
+        </div>
+
+        <!-- ЭКРАН 3: ДОБАВЛЕНИЕ И РЕДАКТИРОВАНИЕ -->
+        <div v-else-if="currentScreen === 'addExercise'" class="flex flex-col h-full bg-gray-900">
+            <header class="p-4 border-b border-gray-700 flex items-center bg-gray-800 shrink-0 z-20">
+                <button @click="currentScreen = 'dayView'" class="mr-4 text-gray-400 hover:text-white p-2"><i class="fa-solid fa-times text-xl"></i></button>
+                <h2 class="text-xl font-bold text-white">Управление</h2>
+            </header>
+
+            <div class="flex-1 overflow-y-auto p-4">
+                <!-- ПЕРЕКЛЮЧАТЕЛЬ -->
+                <div class="flex bg-gray-800 p-1 rounded-lg mb-6 border border-gray-700 sticky top-0 z-10">
+                    <button @click="addMode = 'select'" :class="{'bg-gray-700 text-white shadow': addMode === 'select', 'text-gray-400': addMode !== 'select'}" class="flex-1 py-2 rounded-md text-sm font-medium transition">Ввод</button>
+                    <button @click="addMode = 'create'" :class="{'bg-gray-700 text-white shadow': addMode === 'create', 'text-gray-400': addMode !== 'create'}" class="flex-1 py-2 rounded-md text-sm font-medium transition">Новое</button>
+                    <button @click="addMode = 'edit'" :class="{'bg-gray-700 text-white shadow': addMode === 'edit', 'text-gray-400': addMode !== 'edit'}" class="flex-1 py-2 rounded-md text-sm font-medium transition">Ред.</button>
+                </div>
+
+                <!-- 1. РЕЖИМ ВЫБОРА -->
+                <div v-if="addMode === 'select'" class="animate-fade-in">
+                    <label class="block text-sm font-medium text-gray-400 mb-2">Упражнение</label>
+                    <select v-model="newLog.exerciseId" class="w-full p-4 border border-gray-700 rounded-xl bg-gray-800 text-white mb-4 outline-none focus:border-blue-500 appearance-none">
+                        <option disabled value="">Выберите из списка...</option>
+                        <option v-for="ex in exercises" :key="ex.id" :value="ex.id">{{ ex.name }}</option>
+                    </select>
+
+                    <div v-if="newLog.exerciseId" class="animate-fade-in">
+                        <div class="flex justify-between items-center mb-4 mt-6">
+                            <h3 class="font-bold text-gray-200">Подходы</h3>
+                            <span class="text-xs px-2 py-1 rounded bg-gray-800 border border-gray-700 text-gray-300 truncate max-w-[150px]">{{ getExerciseName(newLog.exerciseId) }}</span>
+                        </div>
+                        <div v-for="(set, idx) in newLog.sets" :key="idx" class="flex gap-2 mb-3 items-center">
+                            <span class="text-gray-500 w-6 font-mono text-sm text-center">{{ idx+1 }}</span>
+                            <input v-model.number="set.weight" type="number" placeholder="КГ" class="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg text-white text-center outline-none focus:border-blue-500">
+                            <input v-model.number="set.reps" type="number" placeholder="ПОВТ" class="w-full p-3 bg-gray-800 border border-gray-700 rounded-lg text-white text-center outline-none focus:border-blue-500">
+                            <button @click="removeSet(idx)" class="text-gray-600 hover:text-red-500 px-2"><i class="fa-solid fa-times"></i></button>
+                        </div>
+                        <button @click="addSet" class="text-blue-400 text-sm font-medium hover:text-blue-300 mb-8 py-2 block w-full text-center border border-dashed border-gray-700 rounded-lg active:scale-95 transition">+ Еще подход</button>
+                        <button @click="saveLog" class="w-full bg-blue-600 text-white font-bold py-4 rounded-xl shadow-lg hover:bg-blue-500 active:bg-blue-700 transition mb-6">Сохранить результат</button>
+                    </div>
+                    <div v-else-if="exercises.length === 0" class="text-center text-gray-500 mt-10">
+                        Список пуст. Создайте упражнение во вкладке "Новое".
+                    </div>
+                </div>
+
+                <!-- 2. РЕЖИМ СОЗДАНИЯ -->
+                <div v-if="addMode === 'create'" class="space-y-4 mb-6 border border-gray-700 p-4 rounded-xl bg-gray-800/50 animate-fade-in">
+                    <h3 class="text-white font-bold mb-2">Новое упражнение</h3>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-400 mb-1">Название</label>
+                        <input v-model="newExercise.name" type="text" placeholder="Например: Становая тяга" class="w-full p-3 bg-gray-700 border border-gray-600 rounded-lg text-white outline-none focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-400 mb-2">Цвет маркера</label>
+                        <div class="flex gap-3 flex-wrap">
+                            <div v-for="color in colors" :key="color" @click="newExercise.color = color" class="w-8 h-8 rounded-full cursor-pointer transition transform hover:scale-110 relative border-2 border-transparent hover:border-white" :style="{ backgroundColor: color }">
+                                 <i v-if="newExercise.color === color" class="fa-solid fa-check text-white absolute inset-0 flex items-center justify-center text-xs"></i>
+                            </div>
+                        </div>
+                    </div>
+                    <button @click="createExercise" class="w-full py-3 bg-gray-700 hover:bg-gray-600 active:bg-gray-500 text-white rounded-lg text-sm font-bold transition border border-gray-600">Создать</button>
+                </div>
+
+                <!-- 3. РЕЖИМ РЕДАКТИРОВАНИЯ -->
+                <div v-if="addMode === 'edit'" class="animate-fade-in">
+                    <div v-if="!editingExerciseId" class="space-y-2">
+                        <p class="text-gray-400 text-xs mb-2 uppercase tracking-wide">Выберите для правки:</p>
+                        <div v-for="ex in exercises" :key="ex.id" @click="startEditing(ex)" class="bg-gray-800 p-3 rounded-lg border border-gray-700 flex justify-between items-center cursor-pointer hover:bg-gray-700 active:bg-gray-600 transition">
+                            <div class="flex items-center gap-3">
+                                <div class="w-3 h-3 rounded-full shadow-sm" :style="{background: ex.color}"></div>
+                                <span class="text-white font-medium">{{ ex.name }}</span>
+                            </div>
+                            <i class="fa-solid fa-pen text-gray-500 text-sm"></i>
+                        </div>
+                        <div v-if="exercises.length === 0" class="text-center text-gray-500 mt-10">Список пуст</div>
+                    </div>
+
+                    <div v-else class="space-y-4 border border-blue-900/50 p-4 rounded-xl bg-blue-900/10 animate-fade-in">
+                        <div class="flex justify-between items-center mb-2">
+                            <h3 class="text-white font-bold">Редактирование</h3>
+                            <button @click="cancelEditing" class="text-sm text-gray-400 underline p-2">Отмена</button>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-400 mb-1">Название</label>
+                            <input v-model="editForm.name" type="text" class="w-full p-3 bg-gray-800 border border-gray-600 rounded-lg text-white outline-none focus:border-blue-500">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-400 mb-2">Цвет</label>
+                            <div class="flex gap-3 flex-wrap">
+                                <div v-for="color in colors" :key="color" @click="editForm.color = color" class="w-8 h-8 rounded-full cursor-pointer transition transform relative" :style="{ backgroundColor: color }">
+                                     <i v-if="editForm.color === color" class="fa-solid fa-check text-white absolute inset-0 flex items-center justify-center text-xs"></i>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="flex gap-3 pt-4">
+                            <button @click="deleteExistingExercise" class="flex-1 py-3 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-900/50 rounded-lg text-sm font-bold transition">Удалить</button>
+                            <button @click="saveEditing" class="flex-[2] py-3 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white rounded-lg text-sm font-bold transition shadow-lg">Сохранить</button>
+                        </div>
+                        <p class="text-[10px] text-gray-500 text-center mt-2 leading-tight">Если удалить упражнение, оно пропадет из списка выбора, но история весов останется.</p>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+        
+        <!-- ЭКРАН 4: АНАЛИТИКА -->
+        <div v-else-if="currentScreen === 'analytics'" class="flex flex-col h-full bg-gray-900">
+            <header class="p-4 border-b border-gray-700 flex items-center bg-gray-800 shrink-0 z-20">
+                <button @click="currentScreen = 'calendar'" class="mr-4 text-gray-400 hover:text-white p-2"><i class="fa-solid fa-arrow-left text-xl"></i></button>
+                <h2 class="text-xl font-bold text-white">Аналитика</h2>
+            </header>
+
+            <div class="p-4 flex-1 overflow-y-auto">
+                <label class="block text-sm font-medium text-gray-400 mb-2">Прогресс по упражнению</label>
+                <select v-model="analyticsExerciseId" @change="updateChart" class="w-full p-3 border border-gray-700 rounded-lg bg-gray-800 text-white mb-6 outline-none focus:border-blue-500">
+                    <option disabled value="">Выберите упражнение...</option>
+                    <option v-for="ex in exercises" :key="ex.id" :value="ex.id">{{ ex.name }}</option>
+                </select>
+                <div v-if="analyticsExerciseId" class="bg-gray-800 p-2 rounded-xl shadow-lg border border-gray-700 mb-6 min-h-[250px] animate-fade-in">
+                    <canvas id="myChart"></canvas>
+                </div>
+                <div v-else class="text-center text-gray-500 mt-20">
+                    <i class="fa-solid fa-chart-area text-4xl mb-3 opacity-30"></i>
+                    <p>Выберите упражнение для просмотра графика</p>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<script>
+    const { createApp, ref, computed, onMounted, nextTick } = Vue;
+
+    Chart.defaults.color = '#9ca3af';
+    Chart.defaults.borderColor = '#374151';
+
+    createApp({
+        setup() {
+            // === AUTH STATE ===
+            const authEmail = ref('');
+            const authPass = ref('');
+            const isLoginMode = ref(true);
+            const isLoading = ref(false);
+            const authError = ref('');
+            const userEmail = ref('');
+            const userId = ref(null);
+
+            // === APP STATE ===
+            const currentScreen = ref('auth');
+            const exercises = ref([]); 
+            const logs = ref({}); 
+            
+            // Calendar setup
+            const today = new Date();
+            const currentMonth = ref(today.getMonth());
+            const currentYear = ref(today.getFullYear());
+            const weekDays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+            
+            // Adding & Editing UI vars
+            const selectedDate = ref(null);
+            const addMode = ref('select');
+            const newExercise = ref({ name: '', color: '#3B82F6' });
+            const newLog = ref({ exerciseId: '', sets: [{weight: null, reps: null}] });
+            
+            // Editing Logic Vars
+            const editingExerciseId = ref(null);
+            const editForm = ref({ name: '', color: '' });
+
+            const colors = ['#EF4444', '#F97316', '#F59E0B', '#10B981', '#3B82F6', '#6366F1', '#8B5CF6', '#EC4899'];
+            
+            // Analytics
+            const analyticsExerciseId = ref('');
+            let chartInstance = null;
+
+            // === FIREBASE HELPERS ===
+            // Обёртки над глобальными функциями, чтобы Vue их видел
+            const saveToCloud = () => {
+                if (!userId.value) return;
+                const data = { exercises: exercises.value, logs: logs.value };
+                window.setDB(window.refDB(window.db, 'users/' + userId.value + '/data'), data);
+            };
+
+            const loadFromCloud = async () => {
+                isLoading.value = true;
+                try {
+                    const snapshot = await window.getDB(window.childDB(window.refDB(window.db), 'users/' + userId.value + '/data'));
+                    if (snapshot.exists()) {
+                        const data = snapshot.val();
+                        exercises.value = data.exercises || [];
+                        logs.value = data.logs || {};
+                    } else {
+                        exercises.value = [];
+                        logs.value = {};
+                    }
+                    currentScreen.value = 'calendar';
+                } catch (error) {
+                    console.error("Load Error:", error);
+                } finally {
+                    isLoading.value = false;
+                }
+            };
+
+            // === AUTHENTICATION ===
+            onMounted(() => {
+                setTimeout(() => {
+                    if(window.onAuth && window.auth) {
+                        window.onAuth(window.auth, (user) => {
+                            if (user) {
+                                userEmail.value = user.email;
+                                userId.value = user.uid;
+                                loadFromCloud();
+                            } else {
+                                currentScreen.value = 'auth';
+                                userId.value = null;
+                            }
+                        });
+                    }
+                }, 500); // Небольшая задержка для инициализации модуля
+            });
+
+            const handleAuth = async () => {
+                if(!authEmail.value || !authPass.value) return;
+                isLoading.value = true;
+                authError.value = '';
+                try {
+                    if(isLoginMode.value) await window.loginUser(authEmail.value, authPass.value);
+                    else await window.registerUser(authEmail.value, authPass.value);
+                } catch (e) {
+                    let msg = e.message;
+                    if(msg.includes('invalid-email')) msg = 'Некорректный Email';
+                    else if(msg.includes('missing-password')) msg = 'Введите пароль';
+                    else if(msg.includes('weak-password')) msg = 'Пароль слишком простой (мин 6 симв.)';
+                    else if(msg.includes('invalid-credential')) msg = 'Неверный логин или пароль';
+                    authError.value = msg;
+                    isLoading.value = false;
+                }
+            };
+
+            const doLogout = async () => {
+                await window.logoutUser();
+                exercises.value = [];
+                logs.value = {};
+            };
+
+            const toggleAuthMode = () => { isLoginMode.value = !isLoginMode.value; authError.value = ''; };
+
+            // === CALENDAR & HELPERS ===
+            const currentMonthName = computed(() => new Date(currentYear.value, currentMonth.value).toLocaleString('ru', { month: 'long' }));
+            const daysInMonth = computed(() => new Date(currentYear.value, currentMonth.value + 1, 0).getDate());
+            const emptyDaysStart = computed(() => {
+                let day = new Date(currentYear.value, currentMonth.value, 1).getDay();
+                return day === 0 ? 6 : day - 1; 
+            });
+
+            const changeMonth = (step) => {
+                let newMonth = currentMonth.value + step;
+                if (newMonth > 11) { currentMonth.value = 0; currentYear.value++; } 
+                else if (newMonth < 0) { currentMonth.value = 11; currentYear.value--; } 
+                else { currentMonth.value = newMonth; }
+            };
+
+            const isToday = (day) => {
+                const d = new Date();
+                return day === d.getDate() && currentMonth.value === d.getMonth() && currentYear.value === d.getFullYear();
+            };
+
+            const getDayDots = (day) => {
+                const dateKey = `${currentYear.value}-${String(currentMonth.value + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                if (!logs.value[dateKey]) return [];
+                const uniqueExIds = [...new Set(logs.value[dateKey].map(l => l.exerciseId))];
+                return uniqueExIds.map(id => getExerciseColor(id)).slice(0, 4);
+            };
+
+            const openDay = (day) => {
+                selectedDate.value = `${currentYear.value}-${String(currentMonth.value + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                currentScreen.value = 'dayView';
+            };
+
+            const formatDate = (dateStr) => {
+                if(!dateStr) return '';
+                const d = new Date(dateStr);
+                return d.toLocaleString('ru', { day: 'numeric', month: 'long', year: 'numeric' });
+            };
+
+            const getExerciseName = (id) => exercises.value.find(e => e.id === id)?.name || '???';
+            const getExerciseColor = (id) => exercises.value.find(e => e.id === id)?.color || '#6B7280';
+            const getDayLogs = (date) => logs.value[date] || [];
+
+            const goToAddExercise = () => {
+                newLog.value = { exerciseId: '', sets: [{weight: null, reps: null}] };
+                addMode.value = exercises.value.length > 0 ? 'select' : 'create';
+                editingExerciseId.value = null; // сброс редактирования
+                currentScreen.value = 'addExercise';
+            };
+
+            // === CRUD Logic ===
+            const createExercise = () => {
+                if (!newExercise.value.name) return;
+                const id = Date.now().toString();
+                exercises.value.push({ id, ...newExercise.value });
+                newLog.value.exerciseId = id;
+                newExercise.value = { name: '', color: '#3B82F6' };
+                addMode.value = 'select';
+                saveToCloud();
+            };
+
+            const addSet = () => newLog.value.sets.push({ weight: null, reps: null });
+            const removeSet = (idx) => newLog.value.sets.splice(idx, 1);
+
+            const saveLog = () => {
+                if (!newLog.value.exerciseId) return;
+                if (!logs.value[selectedDate.value]) logs.value[selectedDate.value] = [];
+                const validSets = newLog.value.sets.filter(s => s.weight !== null && s.reps !== null);
+                if (validSets.length === 0) return;
+                logs.value[selectedDate.value].push({ exerciseId: newLog.value.exerciseId, sets: validSets });
+                saveToCloud();
+                currentScreen.value = 'dayView';
+            };
+
+            const deleteLog = (date, idx) => {
+                if(confirm('Удалить эту запись тренировки?')) {
+                    logs.value[date].splice(idx, 1);
+                    saveToCloud();
+                }
+            };
+
+            // === EDITING Logic (New) ===
+            const startEditing = (ex) => {
+                editingExerciseId.value = ex.id;
+                editForm.value = { name: ex.name, color: ex.color };
+            };
+            const cancelEditing = () => { editingExerciseId.value = null; };
+            
+            const saveEditing = () => {
+                const exIndex = exercises.value.findIndex(e => e.id === editingExerciseId.value);
+                if (exIndex !== -1 && editForm.value.name) {
+                    exercises.value[exIndex].name = editForm.value.name;
+                    exercises.value[exIndex].color = editForm.value.color;
+                    saveToCloud();
+                    editingExerciseId.value = null;
+                }
+            };
+
+            const deleteExistingExercise = () => {
+                if(confirm('Удалить упражнение из списка выбора? История весов останется.')) {
+                    const exIndex = exercises.value.findIndex(e => e.id === editingExerciseId.value);
+                    if (exIndex !== -1) {
+                        exercises.value.splice(exIndex, 1);
+                        saveToCloud();
+                        editingExerciseId.value = null;
+                    }
+                }
+            };
+
+            // === ANALYTICS ===
+            const updateChart = async () => {
+                if (!analyticsExerciseId.value) return;
+                const dataPoints = [];
+                const sortedDates = Object.keys(logs.value).sort();
+                sortedDates.forEach(date => {
+                    const dayLogs = logs.value[date].filter(l => l.exerciseId === analyticsExerciseId.value);
+                    if (dayLogs.length > 0) {
+                        let dayMaxWeight = 0;
+                        dayLogs.forEach(l => {
+                            l.sets.forEach(s => { if (s.weight > dayMaxWeight) dayMaxWeight = s.weight; });
+                        });
+                        dataPoints.push({ x: date, y: dayMaxWeight });
+                    }
+                });
+                await nextTick();
+                const ctx = document.getElementById('myChart');
+                if (chartInstance) chartInstance.destroy();
+                const exColor = getExerciseColor(analyticsExerciseId.value);
+                chartInstance = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: dataPoints.map(d => d.x),
+                        datasets: [{ label: 'Макс. вес', data: dataPoints.map(d => d.y), borderColor: exColor, backgroundColor: exColor + '40', fill: true, tension: 0.3, pointRadius: 4 }]
+                    },
+                    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { grid: { color: '#374151' } }, x: { display: false } } }
+                });
+            };
+
+            return {
+                currentScreen, authEmail, authPass, isLoginMode, isLoading, authError, handleAuth, toggleAuthMode, doLogout, userEmail,
+                exercises, logs, currentMonth, currentYear, currentMonthName, weekDays, daysInMonth, emptyDaysStart, changeMonth, isToday, getDayDots, openDay,
+                selectedDate, formatDate, getDayLogs, getExerciseName, getExerciseColor, deleteLog,
+                addMode, newExercise, newLog, colors, goToAddExercise, createExercise, addSet, removeSet, saveLog,
+                analyticsExerciseId, updateChart,
+                editingExerciseId, editForm, startEditing, cancelEditing, saveEditing, deleteExistingExercise
+            };
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
